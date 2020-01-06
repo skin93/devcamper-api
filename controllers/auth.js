@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const ErrorResponse = require('../utils/errorResponse');
 const asyncHandler = require('../middleware/async');
 const sendEmail = require('../utils/sendEmail');
@@ -56,27 +57,6 @@ exports.getMe = asyncHandler(async (req, res, next) => {
   res.status(200).json({ succes: true, data: user });
 });
 
-// get token from model, create cookie and send response
-const sendTokenResponse = (user, statusCode, res) => {
-  // create token
-  const token = user.getSignedJwtToken();
-  const options = {
-    expires: new Date(
-      Date.now() + process.env.JWT_COOKIE_EXPIRE * 24 * 60 * 60 * 1000
-    ),
-    httpOnly: true
-  };
-
-  if (process.env.NODE_ENV === 'production') {
-    options.secure = true;
-  }
-
-  res
-    .status(statusCode)
-    .cookie('token', token, options)
-    .json({ success: true, token });
-};
-
 // @desc    Forgot password
 // @route   POST /api/v1/auth/forgotpassword
 // @access  Public
@@ -94,7 +74,7 @@ exports.forgotPassword = asyncHandler(async (req, res, next) => {
   // create reset url
   const resetUrl = `${req.protocol}://${req.get(
     'host'
-  )}/api/v1/resetpassword/${resetToken}`;
+  )}/api/v1/auth/resetpassword/${resetToken}`;
 
   const message = `You are receiving this email because you (or someone else) has requested the reset of password. Please make a PUT request to: \n\n ${resetUrl}`;
 
@@ -118,3 +98,52 @@ exports.forgotPassword = asyncHandler(async (req, res, next) => {
 
   res.status(200).json({ succes: true, data: user });
 });
+
+// @desc    Reset password
+// @route   PUT /api/v1/auth/resetpassword/:resettoken
+// @access  Public
+exports.resetPassword = asyncHandler(async (req, res, next) => {
+  // get hashed token
+  const resetPasswordToken = crypto
+    .createHash('sha256')
+    .update(req.params.resettoken)
+    .digest('hex');
+
+  const user = await User.findOne({
+    resetPasswordToken,
+    resetPasswordExpired: { $gt: Date.now() }
+  });
+
+  if (!user) {
+    return next(new ErrorResponse('Invalid token', 400));
+  }
+
+  // set new password
+  user.password = req.body.password;
+  user.resetPasswordToken = undefined;
+  user.resetPasswordExpired = undefined;
+  await user.save();
+
+  sendTokenResponse(user, 200, res);
+});
+
+// get token from model, create cookie and send response
+const sendTokenResponse = (user, statusCode, res) => {
+  // create token
+  const token = user.getSignedJwtToken();
+  const options = {
+    expires: new Date(
+      Date.now() + process.env.JWT_COOKIE_EXPIRE * 24 * 60 * 60 * 1000
+    ),
+    httpOnly: true
+  };
+
+  if (process.env.NODE_ENV === 'production') {
+    options.secure = true;
+  }
+
+  res
+    .status(statusCode)
+    .cookie('token', token, options)
+    .json({ success: true, token });
+};
